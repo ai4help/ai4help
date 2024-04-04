@@ -1,6 +1,10 @@
 from django.db import models
 from pymongo import MongoClient
-client = MongoClient("mongodb+srv://ai4help:PEXiXEq%23Am3HxHk@cluster0.t086sbe.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+from dotenv import load_dotenv
+import os
+load_dotenv()
+
+client = MongoClient(os.environ.get('MongoDB'))
 
 new_database = 'ai4help'
 
