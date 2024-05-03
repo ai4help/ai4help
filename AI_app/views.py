@@ -13,6 +13,9 @@ import json
 import re
 import PyPDF2
 import os
+import ast
+
+from docx2python import docx2python
 load_dotenv()
 
 
@@ -43,41 +46,28 @@ def read_pdf(pdf_path):
             text += page.extract_text()
         text = text.replace('\n', ' ')
         return text
-
+def read_docx(docx_path):
+    docx_content = docx2python(docx_path)
+    return docx_content.text
 
 # Extract information from text
 def extract_information(text):
-    # Initialize variables to store extracted information
-    education = ""
-    work_experience = ""
-    technology = ""
-    skills = []
 
-    # Split the text into sections based on "\n\n"
-    sections = text.split("\n\n")
-
-    # Iterate over each section
-    for section in sections:
-        # Extract educational information
-        if "Educational Information:" in section:
-            education = extract_section_content(section)
-        # Extract work experience information
-        elif "Work Experience Information:" in section:
-            work_experience = extract_section_content(section)
-        # Extract skills and technology
-        elif "Skills and Technology:" in section:
-            lines = section.split('\n')
-            for line in lines:
-                if "- Hard Skills:" in line:
-                    technology = extract_section_content(line)
-                elif "- Scripting:" in line or "- Source Code Management Tools:" in line or "- Languages:" in line:
-                    skills.append(extract_skills(line))
+    result_data = ast.literal_eval(text).get('Data')
+    result_data = {key.lower(): value for key, value in result_data.items()}
+    if 'skills' in result_data:
+        skill_dict = result_data['skills']
+    if 'core competencies' in result_data:
+        skill_dict = result_data['core competencies']
+    if 'technology' in result_data:
+        skill_dict = result_data['technology']
+    education = result_data['education']
+    work_experience = result_data['work experience']
 
     return {
         "education": education,
         "work_experience": work_experience,
-        "technology": technology,
-        "skills": skills
+        "skills": skill_dict
     }
 
 # Extract content from a section
@@ -120,52 +110,103 @@ class UploadPdfAPIView(APIView):
             uploaded_file = request.data.get('file')
             if not uploaded_file:
                 return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
-            # Ensure the media directory exists
-            media_dir = settings.MEDIA_ROOT
-            if not os.path.exists(media_dir):
-                os.makedirs(media_dir)
-            # Save the file to the media directory
-            file_path = os.path.join(media_dir, uploaded_file.name)
-            with open(file_path, 'wb') as destination:
-                for chunk in uploaded_file.chunks():
-                    destination.write(chunk)
-            # Process PDF and get text
-            pdf_text = read_pdf(file_path)
-            prompt = {
-                "role": "system",
-                "content": """!IMPORTANT Please follow these steps:
-                        1. Your sole purpose is to understand the text and extract the following information: educational information, work experience information, skills and technology. 
-                        2. If you successfully extract this information, respond with Message: 'Success' and provide the data containing all the extracted information.
-                        """
-            }
+            file_type = uploaded_file.content_type
 
-            user_message_object = {
-                "role": "user",
-                "content": pdf_text
-            }
-            client = OpenAI(api_key=os.environ.get('OPEN_AI_KEY'))
-            # Call OpenAI API to generate completion based on prompts
-            response=client.chat.completions.create(
-                model="gpt-4",
-                messages=[prompt, user_message_object],
-                max_tokens=2048,
-                temperature=0
-            )
+            if file_type != 'application/pdf':
+                media_dir = settings.MEDIA_ROOT
+                if not os.path.exists(media_dir):
+                    os.makedirs(media_dir)
+                # Save the file to the media directory
+                file_path = os.path.join(media_dir, uploaded_file.name)
+                with open(file_path, 'wb') as destination:
+                    for chunk in uploaded_file.chunks():
+                        destination.write(chunk)
+                docx_data = read_docx(file_path)
+                prompt = {
+                    "role": "system",
+                    "content": f"""!IMPORTANT Please follow these steps:
+                            1. Your only purpose is to understand the {docx_data} and find the related information regarding Education of the candidate and Work Experience of the candidate and  skills,CORE COMPETENCIES, technology.And if you found out then respond with Message :'Success' and Data having all the informations.
+                            2. If you find create separate dict for each section.
+                            """
+                }
+                # prompt = {
+                #     "role": "system",
+                #     "content": """!IMPORTANT Please follow these steps:
+                #             1. Your sole purpose is to understand the text and extract the related information from the following : educational information, work experience information, skills,CORE COMPETENCIES and technology.
+                #             2. If you find something related to skills,CORE COMPETENCIES and technology, put them all in skill section.
+                #             3. If you successfully extract this information, respond with Message: 'Success' and provide the data containing all the extracted information.
+                #             4. Create a dict of all the extracted information and return it as a response.
+                #             """
+                # }
 
-            result = response.choices[0].message.content
-            result_text = extract_information(result)
-            data = {
-                "session_id": request.session._session_key,
-                "pdf_data": result_text
-            }
-            update_and_insert_pdf_data(data)
-            request.session["topic"] = result_text
-            return Response({"msg": "success"}, status=status.HTTP_200_OK)
+                user_message_object = {
+                    "role": "user",
+                    "content": "response"
+                }
+                client = OpenAI(api_key=os.environ.get('OPEN_AI_KEY'))
+                # Call OpenAI API to generate completion based on prompts
+                response=client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[prompt, user_message_object],
+                    max_tokens=2048,
+                    temperature=0
+                )
+
+                result = response.choices[0].message.content
+                result_text = extract_information(result)
+                data = {
+                    "session_id": request.session._session_key,
+                    "pdf_data": result_text
+                }
+                update_and_insert_pdf_data(data)
+                request.session["topic"] = result_text
+                return Response({"msg": "success"}, status=status.HTTP_200_OK)
+            else:
+                # Ensure the media directory exists
+                media_dir = settings.MEDIA_ROOT
+                if not os.path.exists(media_dir):
+                    os.makedirs(media_dir)
+                # Save the file to the media directory
+                file_path = os.path.join(media_dir, uploaded_file.name)
+                with open(file_path, 'wb') as destination:
+                    for chunk in uploaded_file.chunks():
+                        destination.write(chunk)
+                # Process PDF and get text
+                pdf_text = read_pdf(file_path)
+                prompt = {
+                    "role": "system",
+                    "content": f"""!IMPORTANT Please follow these steps:
+                            1. Your only purpose is to understand the {pdf_text} and find the related information regarding Education of the candidate and Work Experience of the candidate and  skills,CORE COMPETENCIES, technology.And if you found out then respond with Message :'Success' and Data having all the informations.
+                            2. If you find create separate dict for each section.
+                            """
+                }
+
+                user_message_object = {
+                    "role": "user",
+                    "content": "response"
+                }
+                client = OpenAI(api_key=os.environ.get('OPEN_AI_KEY'))
+                # Call OpenAI API to generate completion based on prompts
+                response=client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[prompt, user_message_object],
+                    max_tokens=2048,
+                    temperature=0
+                )
+
+                result = response.choices[0].message.content
+                result_text = extract_information(result)
+                data = {
+                    "session_id": request.session._session_key,
+                    "pdf_data": result_text
+                }
+                update_and_insert_pdf_data(data)
+                request.session["topic"] = result_text
+                return Response({"msg": "success"}, status=status.HTTP_200_OK)
         except Exception as e:
             # Log the error for debugging purposes
             print("Error in processing:", e)
             return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 # Update or insert conversation data
 def update_or_insert_conversation(request, topic, conversation):
